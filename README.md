@@ -13,7 +13,7 @@ Socrata API → raw landing → Postgres staging → SQL transform/UPSERT → st
 
 ## Status
 - [x] Repo scaffolding (venv, .gitignore, requirements.txt)
-- [ ] Data exploration
+- [x] Data exploration
 - [ ] Schema design + ADRs
 - [ ] Initial backfill
 - [ ] Incremental load logic
