@@ -11,13 +11,24 @@ BASE_URL = "https://data.cityofnewyork.us/resource/erm2-nwe9.json"
 headers = {"X-App-Token": APP_TOKEN}
 
 params = {
-    "$select": '*',
+    "$select": 'count(*) as total_records',
+    "$where": "created_date >= '2025-10-01T00:00:00' AND created_date < '2026-10-01T00:00:00'",
      }
-respose = requests.get(BASE_URL, headers=headers, params=params)
-data=respose.json()
-df = pd.DataFrame(data)
-print(df.isnull().sum())
-print(df.count())
+response = requests.get(BASE_URL, headers=headers, params=params)
+data=response.json()
+print('status_code:', response.status_code)
+print("Records returned:", len(data))
+print(data)
+
+
+
+
+
+##df = pd.DataFrame(data)
+##print(df.shape)
+##print(df.columns)
+##print(df.count())
+
 
 
 
