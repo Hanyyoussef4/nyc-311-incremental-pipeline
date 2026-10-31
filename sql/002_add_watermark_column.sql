@@ -1,0 +1,46 @@
+-- Step 4 (continued): add the watermark field to staging
+-- Table: staging.staging_311_requests
+--
+-- Design notes:
+--   - The original backfill extraction used Socrata's "*" select, which
+--     only returns the dataset's regular fields. :updated_at is a Socrata
+--     *system* field and is never included in a plain "*" select - it has
+--     to be requested by name (or via the :*,* wildcard). As a result, the
+--     first backfill never captured it anywhere, not even inside
+--     raw_payload, since Socrata never sent it in the first place.
+--   - :updated_at is the field ADR-0002 already chose as the incremental
+--     watermark, so this gap had to be closed before incremental loads
+--     could start.
+--   - Fix applied in two parts: (1) the extraction script now requests
+--     ":*,*" so :updated_at (and other system fields) come back, and
+--     (2) this column stores it. The staging table was fully re-pulled
+--     and reloaded from a corrected extraction rather than patched in
+--     place - see notes/decisions/0007-staging-append-only-history.md
+--     for why staging is append-only across *incremental* loads (this
+--     was a full backfill redo, not an incremental load).
+--   - Named "updated_at" (no leading underscore), matching the other
+--     source-provided timestamp columns (created_date, closed_date, etc.)
+--     rather than the pipeline-owned "_loaded_at" / "_source_file"
+--     naming convention - this value comes from Socrata, not from our
+--     own pipeline.
+--   - TIMESTAMPTZ, not plain TIMESTAMP, unlike created_date/closed_date/
+--     due_date/resolution_action_updated_date. Those are Socrata "Floating
+--     Timestamp" fields - no timezone attached in the source at all, shown
+--     with no offset (e.g. "2026-09-30T23:59:58.000"), so a plain TIMESTAMP
+--     here is a correct match for what the source actually is.
+--     :updated_at is different: it's a Socrata "Fixed Timestamp" system
+--     field, always returned in true UTC with an explicit "Z" suffix
+--     (e.g. "2025-12-26T17:24:15.863Z"). Storing that in a plain TIMESTAMP
+--     column would silently drop the "Z" and leave a bare clock value that
+--     looks identical to the (Eastern-local) floating-timestamp columns,
+--     with nothing in the schema to show they're actually ~4-5 hours apart
+--     in meaning. TIMESTAMPTZ keeps that UTC-ness explicit, which matters
+--     specifically because this column is the incremental watermark - the
+--     value read from here, stored in the control table, and sent back to
+--     Socrata's $where filter all need to stay unambiguously the same
+--     timezone.
+--     (Socrata docs: https://dev.socrata.com/docs/system-fields and
+--     https://support.socrata.com/hc/en-us/articles/4403481607447)
+
+ALTER TABLE staging.staging_311_requests
+ADD COLUMN updated_at TIMESTAMPTZ;

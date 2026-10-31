@@ -18,6 +18,13 @@ and sql/001_create_staging_table.sql for the full reasoning):
   - If the load fails partway through, the whole transaction rolls back
     automatically (nothing partial is left behind). This is a one-time
     script: on failure, just fix the issue and re-run it from scratch.
+
+This version reads from the corrected re-pull (nyc311_backfill_2025-10-01_v2.jsonl),
+extracted with $select=:*,* instead of the original $select=*, so it includes
+:updated_at (the ADR-0002 watermark field, added to the table via
+sql/002_add_updated_at_column.sql) and the system-field versions of the
+computed_region_* columns (:@computed_region_... instead of the plain names
+the original "*" select returned). See SOCRATA_KEY_OVERRIDES below.
 """
 
 import os
@@ -30,11 +37,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-INPUT_FILE = "raw_data/nyc311_backfill_2025-10-01.jsonl"
+INPUT_FILE = "raw_data/nyc311_backfill_2025-10-01_v2.jsonl"
 CHUNK_SIZE = 50000
 
-# Matches sql/001_create_staging_table.sql, column for column, EXCEPT
-# _loaded_at (left out on purpose -- see module docstring).
+# Matches sql/001_create_staging_table.sql + sql/002_add_updated_at_column.sql,
+# column for column, EXCEPT _loaded_at (left out on purpose -- see module
+# docstring).
 COLUMNS = [
     "unique_key", "address_type", "agency", "agency_name", "complaint_type",
     "descriptor", "descriptor_2", "location_type", "incident_zip",
@@ -51,19 +59,33 @@ COLUMNS = [
     "computed_region_sbqj_enih", "computed_region_92fq_4b7q",
     "created_date", "closed_date", "due_date",
     "resolution_action_updated_date", "location", "raw_payload",
-    "_source_file",
+    "_source_file", "updated_at",
 ]
 
 # These two columns hold JSON text (for the JSONB columns), not plain text.
 JSON_COLUMNS = {"location", "raw_payload"}
 
+# Columns whose value lives under a different key in the raw Socrata row than
+# the column's own name. Needed because the :*,* select (used for this re-pull
+# only, not the original one) renames a few fields:
+#   - :updated_at is a system field, Socrata returns it with a leading colon
+#   - the computed_region_* fields come back as :@computed_region_* under this
+#     select, instead of the plain names the original "*" select used
+SOCRATA_KEY_OVERRIDES = {
+    "updated_at": ":updated_at",
+    "computed_region_f5dn_yrer": ":@computed_region_f5dn_yrer",
+    "computed_region_yeji_bk3q": ":@computed_region_yeji_bk3q",
+    "computed_region_sbqj_enih": ":@computed_region_sbqj_enih",
+    "computed_region_92fq_4b7q": ":@computed_region_92fq_4b7q",
+}
+
 
 def row_to_values(row, source_file):
-    """Maps one parsed JSON row (a dict) to a list of 50 values, in the
-    exact order of COLUMNS above. Socrata omits keys with null/empty
-    values entirely, so row.get(col) correctly returns None for any
-    field that isn't present on this particular row -- that becomes a
-    real NULL once written out as an empty CSV field."""
+    """Maps one parsed JSON row (a dict) to a list of values, in the exact
+    order of COLUMNS above. Socrata omits keys with null/empty values
+    entirely, so row.get(col) correctly returns None for any field that
+    isn't present on this particular row -- that becomes a real NULL once
+    written out as an empty CSV field."""
     values = []
     for col in COLUMNS:
         if col == "raw_payload":
@@ -74,6 +96,8 @@ def row_to_values(row, source_file):
         elif col in JSON_COLUMNS:
             val = row.get(col)
             values.append(json.dumps(val) if val is not None else None)
+        elif col in SOCRATA_KEY_OVERRIDES:
+            values.append(row.get(SOCRATA_KEY_OVERRIDES[col]))
         else:
             values.append(row.get(col))
     return values
@@ -105,11 +129,11 @@ def main():
     )
 
     try:
-        # Safety check: warn if this file was already loaded, rather than
-        # silently doubling the data (append-only won't block it -- the
-        # primary key is (unique_key, _loaded_at), so a second run would
-        # just succeed with a new timestamp).
         with conn.cursor() as cur:
+            # Safety check: warn if this file was already loaded, rather than
+            # silently doubling the data (append-only won't block it -- the
+            # primary key is (unique_key, _loaded_at), so a second run would
+            # just succeed with a new timestamp).
             cur.execute(
                 "SELECT COUNT(*) FROM staging.staging_311_requests "
                 "WHERE _source_file = %s",
@@ -145,8 +169,8 @@ def main():
                     print(f"Loaded {total_loaded:,} rows...")
                     chunk = []
 
-            # Final partial chunk, if any rows are left over.
             if chunk:
+                # Final partial chunk, if any rows are left over.
                 buffer = build_csv_buffer(chunk, source_file)
                 cur.copy_expert(copy_sql, buffer)
                 total_loaded += len(chunk)
