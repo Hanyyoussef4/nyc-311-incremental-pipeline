@@ -11,7 +11,7 @@ BASE_URL = "https://data.cityofnewyork.us/resource/erm2-nwe9.json"
 
 headers = {"X-App-Token": APP_TOKEN}
 
-output_path = "raw_data/nyc311_backfill_2025-10-01.jsonl"
+output_path = "raw_data/nyc311_backfill_2025-10-01_v2.jsonl"
 
 WINDOW = "created_date >= '2025-10-01T00:00:00' AND created_date < '2026-10-01T00:00:00'"
 
@@ -44,7 +44,7 @@ else:
     where_clause = WINDOW
 
 params = {
-    "$select": "*",
+    "$select": ":*,*",
     "$where": where_clause,
     "$limit": 20000,
     "$order": "created_date, unique_key"
