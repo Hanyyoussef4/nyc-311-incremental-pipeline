@@ -37,3 +37,25 @@ This query is meant for occasional use, not the main query path — the fact tab
 - Full row-level history is preserved and queryable in Postgres without ever needing to re-extract from the Socrata API or re-parse old raw `.jsonl` files.
 - No duplicated UPSERT logic — UPSERT happens exactly once in the pipeline, at the fact table build step, keeping that logic in a single place.
 - Staging and the fact table have clearly different jobs: staging optimizes for cheap writes and complete history; the fact table optimizes for cheap reads and current state.
+
+**Update (2026-10-31):**
+
+The staging table's primary key was corrected from `(unique_key, _loaded_at)`
+to `(unique_key, updated_at)`. Root cause: `_loaded_at` is pinned once per
+transaction (via `NOW()`), not per row, so two genuinely distinct versions
+of the same complaint loaded within the same run could share an identical
+`_loaded_at` value — making it unreliable as a per-row ordering key. This
+affects the current-state query above the same way it affected the primary
+key: ordering by `_loaded_at DESC` cannot reliably distinguish between two
+real versions loaded in the same run. The query and its supporting index
+should use `updated_at DESC` instead, since Socrata only advances
+`updated_at` when something genuinely changed:
+
+```sql
+SELECT DISTINCT ON (unique_key) *
+FROM staging_311_requests
+ORDER BY unique_key, updated_at DESC;
+```
+
+A composite index on `(unique_key, updated_at DESC)` replaces the original
+`(unique_key, _loaded_at DESC)` index for this purpose.
